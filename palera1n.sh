@@ -146,18 +146,8 @@ parse_cmdline() {
 }
 
 recovery_fix_auto_boot() {
-    if [ "$tweaks" = "1" ]; then
-        "$dir"/irecovery -c "setenv auto-boot false"
-        "$dir"/irecovery -c "saveenv"
-    else
-        "$dir"/irecovery -c "setenv auto-boot true"
-        "$dir"/irecovery -c "saveenv"
-    fi
-
-    if [ "$semi_tethered" = "1" ]; then
-        "$dir"/irecovery -c "setenv auto-boot true"
-        "$dir"/irecovery -c "saveenv"
-    fi
+    "$dir"/irecovery -c "setenv auto-boot true"
+    "$dir"/irecovery -c "saveenv"
 }
 
 _info() {
@@ -607,11 +597,18 @@ if [ ! -f blobs/"$deviceid"-"$version".der ]; then
         exit
     fi
     active=$(remote_cmd "cat /mnt6/active" 2> /dev/null)
+    
 
     if [ "$restorerootfs" = "1" ]; then
         echo "[*] Removing Jailbreak"
         if [ ! "$fs" = "disk1s1" ] || [ ! "$fs" = "disk0s1s1" ]; then
             remote_cmd "/sbin/apfs_deletefs $fs > /dev/null || true"
+        fi
+        if [ "$tweaks" = "1" ]; then
+            if [ -z "$semi_tethered" ]; then
+                remote_cmd "snaputil -n rom.apple.os.update-$active com.apple.os.update-$active /mnt1 || true"
+                remote_cmd "mv /mnt1/sbin/launched /mnt1/sbin/launchd"
+            fi
         fi
         remote_cmd "rm -f /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.im4p /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcachd"
         remote_cmd "mv /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache || true"
@@ -622,7 +619,7 @@ if [ ! -f blobs/"$deviceid"-"$version".der ]; then
         remote_cmd "/sbin/reboot"
         exit;
     fi
-
+    
     echo "[*] Dumping apticket"
     sleep 1
     remote_cp root@localhost:/mnt6/$active/System/Library/Caches/apticket.der blobs/"$deviceid"-"$version".der
@@ -646,82 +643,13 @@ if [ ! -f blobs/"$deviceid"-"$version".der ]; then
 
     #remote_cmd "/usr/sbin/nvram allow-root-hash-mismatch=1"
     #remote_cmd "/usr/sbin/nvram root-live-fs=1"
+    remote_cmd "/usr/sbin/nvram auto-boot=true"
+
     if [ "$tweaks" = "1" ]; then
-        if [ "$semi_tethered" = "1" ]; then
-            remote_cmd "/usr/sbin/nvram auto-boot=true"
-        else
-            remote_cmd "/usr/sbin/nvram auto-boot=false"
+        if [ -z "$semi_tethered" ]; then
+            #remote_cmd "snaputil -n com.apple.os.update-$active rom.apple.os.update-$active /mnt1 || true"
+            remote_cmd "mv /mnt1/sbin/launchd /mnt1/sbin/launched"
         fi
-    else
-        remote_cmd "/usr/sbin/nvram auto-boot=true"
-    fi
-
-    # lets actually patch the kernel
-    echo "[*] Patching the kernel"
-    remote_cmd "rm -f /mnt6/$active/kpf"
-    if [[ "$version" == *"16"* ]]; then
-        remote_cp binaries/Kernel16Patcher.ios root@localhost:/mnt6/$active/kpf
-    else
-        remote_cp binaries/Kernel15Patcher.ios root@localhost:/mnt6/$active/kpf
-    fi
-    remote_cmd "/usr/sbin/chown 0 /mnt6/$active/kpf"
-    remote_cmd "/bin/chmod 755 /mnt6/$active/kpf"
-
-    remote_cmd "rm -f /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.im4p /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcachd"
-    if [ "$tweaks" = "1" ]; then
-        if [ "$semi_tethered" = "1" ]; then
-            remote_cmd "cp /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak"
-        else
-            remote_cmd "mv /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak || true"
-        fi
-    fi
-    sleep 1
-
-    # download the kernel
-    echo "[*] Downloading BuildManifest"
-    "$dir"/pzb -g BuildManifest.plist "$ipswurl"
-
-    echo "[*] Downloading kernelcache"
-    "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/kernelcache.release/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
-    
-    echo "[*] Patching kernelcache"
-    mv kernelcache.release.* work/kernelcache
-    if [[ "$deviceid" == "iPhone8"* ]] || [[ "$deviceid" == "iPad6"* ]] || [[ "$deviceid" == *'iPad5'* ]]; then
-        python3 -m pyimg4 im4p extract -i work/kernelcache -o work/kcache.raw --extra work/kpp.bin
-    else
-        python3 -m pyimg4 im4p extract -i work/kernelcache -o work/kcache.raw
-    fi
-    sleep 1
-    remote_cp work/kcache.raw root@localhost:/mnt6/$active/System/Library/Caches/com.apple.kernelcaches/
-    remote_cmd "/mnt6/$active/kpf /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched"
-    remote_cp root@localhost:/mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched work/
-    if [ "$tweaks" = "1" ]; then
-        if [[ "$version" == *"16"* ]]; then
-            "$dir"/Kernel64Patcher work/kcache.patched work/kcache.patched2 -e -o -u -l -t -h -d
-        else
-            "$dir"/Kernel64Patcher work/kcache.patched work/kcache.patched2 -e -l
-        fi
-    else
-        "$dir"/Kernel64Patcher work/kcache.patched work/kcache.patched2 -a
-    fi
-    
-    sleep 1
-    if [[ "$deviceid" == *'iPhone8'* ]] || [[ "$deviceid" == *'iPad6'* ]] || [[ "$deviceid" == *'iPad5'* ]]; then
-        python3 -m pyimg4 im4p create -i work/kcache.patched2 -o work/kcache.im4p -f krnl --extra work/kpp.bin --lzss
-    else
-        python3 -m pyimg4 im4p create -i work/kcache.patched2 -o work/kcache.im4p -f krnl --lzss
-    fi
-    sleep 1
-    remote_cp work/kcache.im4p root@localhost:/mnt6/$active/System/Library/Caches/com.apple.kernelcaches/
-    remote_cmd "img4 -i /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.im4p -o /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcachd -M /mnt6/$active/System/Library/Caches/apticket.der"
-    remote_cmd "rm -f /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.im4p"
-
-    sleep 1
-    has_kernelcachd=$(remote_cmd "ls /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcachd" 2> /dev/null)
-    if [ "$has_kernelcachd" = "/mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcachd" ]; then
-        echo "[*] Custom kernelcache now exists!"
-    else
-        echo "[!] Custom kernelcache doesn't exist..? Please send a log and report this bug..."
     fi
 
     if [ "$tweaks" = "1" ]; then
@@ -738,34 +666,6 @@ if [ ! -f blobs/"$deviceid"-"$version".der ]; then
             remote_cmd "rm -rf /mnt$di/System/Library/Caches/com.apple.dyld"
             remote_cmd "ln -s /System/Cryptexes/OS/System/Library/Caches/com.apple.dyld /mnt$di/System/Library/Caches/"
         fi
-
-        # iOS 16 stuff
-        # if [[ "$version" == *"16"* ]]; then
-        #     if [ -z "$semi_tethered" ]; then
-        #         echo "[*] Performing iOS 16 fixes"
-        #         sleep 1
-        #         os_disk=$(remote_cmd "/usr/sbin/hdik /mnt6/cryptex1/current/os.dmg | head -3 | tail -1 | sed 's/ .*//'")
-        #         sleep 1
-        #         app_disk=$(remote_cmd "/usr/sbin/hdik /mnt6/cryptex1/current/app.dmg | head -3 | tail -1 | sed 's/ .*//'")
-        #         sleep 1
-        #         remote_cmd "/sbin/mount_apfs -o ro $os_disk /mnt2"
-        #         sleep 1
-        #         remote_cmd "/sbin/mount_apfs -o ro $app_disk /mnt9"
-        #         sleep 1
-
-        #         remote_cmd "rm -rf /mnt1/System/Cryptexes/App /mnt1/System/Cryptexes/OS"
-        #         sleep 1
-        #         remote_cmd "mkdir /mnt1/System/Cryptexes/App /mnt1/System/Cryptexes/OS"
-        #         sleep 1
-        #         remote_cmd "cp -a /mnt9/. /mnt1/System/Cryptexes/App"
-        #         sleep 1
-        #         remote_cmd "cp -a /mnt2/. /mnt1/System/Cryptexes/OS"
-        #         sleep 1
-        #         remote_cmd "rm -rf /mnt1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
-        #         sleep 1
-        #         remote_cmd "cp -a /mnt2/System/Library/Caches/com.apple.dyld /mnt1/System/Library/Caches/"
-        #     fi
-        # fi
 
         echo "[*] Copying files to rootfs"
         remote_cmd "rm -rf /mnt$di/jbin /mnt$di/.installed_palera1n"
@@ -870,136 +770,46 @@ else
     fi
 fi
 
-if [ ! -f boot-"$deviceid"/ibot.img4 ]; then
-    # Downloading files, and decrypting iBSS/iBEC
-    rm -rf boot-"$deviceid"
-    mkdir boot-"$deviceid"
-
-    #echo "[*] Converting blob"
-    #"$dir"/img4tool -e -s $(pwd)/blobs/"$deviceid"-"$version".shsh2 -m work/IM4M
-    cd work
-
-    # Do payload if on iPhone 7-X
-    if [[ "$deviceid" == iPhone9,[1-4] ]] || [[ "$deviceid" == "iPhone10,"* ]]; then
-        if [[ "$version" == "16.0"* ]] || [[ "$version" == "15"* ]]; then
-            newipswurl="$ipswurl"
-        else
-            buildid=$(curl -sL https://api.ipsw.me/v4/ipsw/16.0.3 | "$dir"/jq '[.[] | select(.identifier | startswith("'iPhone'")) | .buildid][0]' --raw-output)
-            newipswurl=$(curl -sL https://api.appledb.dev/ios/iOS\;$buildid.json | "$dir"/jq -r .devices\[\"$deviceid\"\].ipsw)
-        fi
-
-        echo "[*] Downloading BuildManifest"
-        "$dir"/pzb -g BuildManifest.plist "$newipswurl"
-
-        echo "[*] Downloading and decrypting iBoot"
-        "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$newipswurl"
-        "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]all_flash[/]//')" ibot.dec
-
-        echo "[*] Patching and signing iBoot"
-        "$dir"/iBoot64Patcher ibot.dec ibot.patched
-
-        if [[ "$deviceid" == iPhone9,[1-4] ]]; then
-            "$dir"/iBootpatch2 --t8010 ibot.patched ibot.patched2
-        else
-            "$dir"/iBootpatch2 --t8015 ibot.patched ibot.patched2
-        fi
-
-        if [ "$os" = 'Linux' ]; then
-            sed -i 's/\/\kernelcache/\/\kernelcachd/g' ibot.patched2
-        else
-            LC_ALL=C sed -i.bak -e 's/s\/\kernelcache/s\/\kernelcachd/g' ibot.patched2
-            rm *.bak
-        fi
-
-        cd ..
-        "$dir"/img4 -i work/ibot.patched2 -o boot-"$deviceid"/ibot.img4 -M blobs/"$deviceid"-"$version".der -A -T ibss
-
-        touch boot-"$deviceid"/.payload
-    else
-        echo "[*] Downloading BuildManifest"
-        "$dir"/pzb -g BuildManifest.plist "$ipswurl"
-
-        echo "[*] Downloading and decrypting iBSS"
-        "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBSS[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
-        "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBSS[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]dfu[/]//')" iBSS.dec
-        
-        echo "[*] Downloading and decrypting iBoot"
-        "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
-        "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]all_flash[/]//')" ibot.dec
-
-        echo "[*] Patching and signing iBSS/iBoot"
-        "$dir"/iBoot64Patcher iBSS.dec iBSS.patched
-        if [ "$semi_tethered" = "1" ]; then
-            if [ "$serial" = "1" ]; then
-                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "serial=3 rd=$fs" -l
-            else
-                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "-v rd=$fs" -l
-            fi
-        else
-            if [ "$serial" = "1" ]; then
-                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "serial=3" -f
-            else
-                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "-v" -f
-            fi
-        fi
-
-        if [ "$os" = 'Linux' ]; then
-            sed -i 's/\/\kernelcache/\/\kernelcachd/g' ibot.patched
-        else
-            LC_ALL=C sed -i.bak -e 's/s\/\kernelcache/s\/\kernelcachd/g' ibot.patched
-            rm *.bak
-        fi
-        cd ..
-        "$dir"/img4 -i work/iBSS.patched -o boot-"$deviceid"/iBSS.img4 -M blobs/"$deviceid"-"$version".der -A -T ibss
-        "$dir"/img4 -i work/ibot.patched -o boot-"$deviceid"/ibot.img4 -M blobs/"$deviceid"-"$version".der -A -T `if [[ "$cpid" == *"0x801"* ]]; then echo "ibss"; else echo "ibec"; fi`
-
-        touch boot-"$deviceid"/.local
-    fi
-fi
-
 # ============
 # Boot device
 # ============
 
 sleep 2
-_pwn
-_reset
-echo "[*] Booting device"
-if [[ "$deviceid" == iPhone9,[1-4] ]] || [[ "$deviceid" == "iPhone10,"* ]]; then
-    sleep 1
-    "$dir"/irecovery -f boot-"$deviceid"/ibot.img4
-    sleep 3
-    "$dir"/irecovery -c "dorwx"
-    sleep 2
-    if [[ "$deviceid" == iPhone9,[1-4] ]]; then
-        "$dir"/irecovery -f other/payload/payload_t8010.bin
-    else
-        "$dir"/irecovery -f other/payload/payload_t8015.bin
-    fi
-    sleep 3
-    "$dir"/irecovery -c "go"
-    sleep 1
-    "$dir"/irecovery -c "go xargs $boot_args"
-    sleep 1
-    "$dir"/irecovery -c "go xfb"
-    sleep 1
-    "$dir"/irecovery -c "go boot $fs"
-else
-    if [[ "$cpid" == *"0x801"* ]]; then
-        sleep 1
-        "$dir"/irecovery -f boot-"$deviceid"/ibot.img4
-    else
-        sleep 1
-        "$dir"/irecovery -f boot-"$deviceid"/iBSS.img4
-        sleep 4
-        "$dir"/irecovery -f boot-"$deviceid"/ibot.img4
-    fi
+if [ ! -e "$dir"/checkra1n ]; then
 
-    if [ -z "$semi_tethered" ]; then
-       sleep 2
-       "$dir"/irecovery -c fsboot
-    fi
+if [ "$os" = "Darwin" ]; then
+    pa1n_url=https://assets.checkra.in/downloads/preview/0.1337.0/checkra1n-macos
+else
+    pa1n_url=https://assets.checkra.in/downloads/preview/0.1337.0/checkra1n-linux-x86_64
 fi
+
+curl -sLo "$dir"/checkra1n "$pa1n_url"
+
+fi
+chmod +x "$dir"/checkra1n
+
+echo "[*] Booting PongoOS"
+
+CHECKRA1N_EARLY_EXIT=1 "$dir"/checkra1n -Vvp
+sleep 2
+
+echo "/send binaries/checkra1n-kpf-pongo" | "$dir"/pongoterm
+echo "modload" | "$dir"/pongoterm
+echo "kpf" | "$dir"/pongoterm
+echo "/send binaries/dtpatcher" | "$dir"/pongoterm
+echo "modload" | "$dir"/pongoterm
+
+if [[ "$version" == *"16"* ]]; then
+    echo "dtpatch16 $disk" | "$dir"/pongoterm
+else
+    echo "dtpatch $disk" | "$dir"/pongoterm
+fi
+
+echo "fuse lock" | "$dir"/pongoterm
+echo "xargs $boot_args keepsyms=1 debug=0x2014e" | "$dir"/pongoterm
+echo "xfb" | "$dir"/pongoterm
+echo "sep auto" | "$dir"/pongoterm
+echo "bootux" | "$dir"/pongoterm &> /dev/null || true
 
 if [ -d "logs" ]; then
     cd logs
